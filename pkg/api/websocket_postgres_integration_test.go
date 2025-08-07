@@ -144,8 +144,8 @@ nodes:
     params:
       script: |
         // Create test data for batch processing and use secrets
-        const apiKey = secrets.API_KEY;
-        const dbPassword = secrets.DB_PASSWORD;
+        var apiKey = secrets.API_KEY;
+        var dbPassword = secrets.DB_PASSWORD;
         
         // Verify that we can access the secrets
         if (!apiKey || !dbPassword) {
@@ -156,8 +156,8 @@ nodes:
         console.log("Using API key: " + apiKey);
         console.log("Using DB password: " + dbPassword);
         
-        const items = [];
-        for (let i = 1; i <= 10; i++) {
+        var items = [];
+        for (var i = 1; i <= 10; i++) {
           items.push({
             id: i,
             value: Math.random() * 100,
@@ -188,7 +188,7 @@ nodes:
         // Process each batch item
         function processBatchItem(item) {
           // Simulate processing time
-          const processingTime = Math.random() * 200 + 50;
+          var processingTime = Math.random() * 200 + 50;
           
           // Simulate failure for specific items (to test retry)
           if (item.shouldFail && Math.random() < 0.7) {
@@ -205,7 +205,10 @@ nodes:
         }
         
         // Process the batch
-        const results = input.items.map(processBatchItem);
+        var results = [];
+        for (var i = 0; i < input.items.length; i++) {
+          results.push(processBatchItem(input.items[i]));
+        }
         return {
           batch_results: results,
           batch_size: results.length,
@@ -228,9 +231,9 @@ nodes:
     type: "condition"
     params:
       condition_script: |
-        const totalItems = input.total_count || 0;
-        const processedItems = input.batch_results ? input.batch_results.length : 0;
-        const successRate = totalItems > 0 ? (processedItems / totalItems) : 0;
+        var totalItems = input.total_count || 0;
+        var processedItems = input.batch_results ? input.batch_results.length : 0;
+        var successRate = totalItems > 0 ? (processedItems / totalItems) : 0;
         
         return {
           success_rate: successRate,
@@ -246,13 +249,23 @@ nodes:
     type: "condition"
     params:
       condition_script: |
-        const analysisResult = input.analysis_result;
+        var analysisResult = input.analysis_result;
+        var result = {};
+        // Copy input properties to result
+        for (var key in input) {
+          if (input.hasOwnProperty(key)) {
+            result[key] = input[key];
+          }
+        }
         if (analysisResult === 'success') {
-          return { branch: 'high_success', ...input };
+          result.branch = 'high_success';
+          return result;
         } else if (analysisResult === 'partial') {
-          return { branch: 'partial_success', ...input };
+          result.branch = 'partial_success';
+          return result;
         } else {
-          return { branch: 'low_success', ...input };
+          result.branch = 'low_success';
+          return result;
         }
     next:
       high_success: "high_success_handler"
@@ -265,13 +278,18 @@ nodes:
     type: "transform"
     params:
       script: |
-        return {
-          ...input,
-          status: 'COMPLETED_SUCCESSFULLY',
-          message: "Excellent! " + (input.success_rate * 100) + "% success rate achieved.",
-          recommendations: ['Continue with current processing strategy', 'Consider increasing batch size'],
-          next_action: 'proceed_to_next_stage'
-        };
+        var result = {};
+        // Copy input properties to result
+        for (var key in input) {
+          if (input.hasOwnProperty(key)) {
+            result[key] = input[key];
+          }
+        }
+        result.status = 'COMPLETED_SUCCESSFULLY';
+        result.message = "Excellent! " + (input.success_rate * 100) + "% success rate achieved.";
+        result.recommendations = ['Continue with current processing strategy', 'Consider increasing batch size'];
+        result.next_action = 'proceed_to_next_stage';
+        return result;
     next:
       success: "final_summary"
 
@@ -280,13 +298,18 @@ nodes:
     type: "transform"
     params:
       script: |
-        return {
-          ...input,
-          status: 'COMPLETED_WITH_WARNINGS',
-          message: "Moderate success: " + (input.success_rate * 100) + "% success rate.",
-          recommendations: ['Review failed items', 'Consider adjusting retry strategy'],
-          next_action: 'review_and_retry'
-        };
+        var result = {};
+        // Copy input properties to result
+        for (var key in input) {
+          if (input.hasOwnProperty(key)) {
+            result[key] = input[key];
+          }
+        }
+        result.status = 'COMPLETED_WITH_WARNINGS';
+        result.message = "Moderate success: " + (input.success_rate * 100) + "% success rate.";
+        result.recommendations = ['Review failed items', 'Consider adjusting retry strategy'];
+        result.next_action = 'review_and_retry';
+        return result;
     retry:
       max_retries: 1
       wait: 100ms
@@ -298,13 +321,18 @@ nodes:
     type: "transform"
     params:
       script: |
-        return {
-          ...input,
-          status: 'COMPLETED_WITH_ERRORS',
-          message: "Low success rate: " + (input.success_rate * 100) + "%. Investigation required.",
-          recommendations: ['Investigate root cause', 'Review system health', 'Consider rollback'],
-          next_action: 'escalate_to_admin'
-        };
+        var result = {};
+        // Copy input properties to result
+        for (var key in input) {
+          if (input.hasOwnProperty(key)) {
+            result[key] = input[key];
+          }
+        }
+        result.status = 'COMPLETED_WITH_ERRORS';
+        result.message = "Low success rate: " + (input.success_rate * 100) + "%. Investigation required.";
+        result.recommendations = ['Investigate root cause', 'Review system health', 'Consider rollback'];
+        result.next_action = 'escalate_to_admin';
+        return result;
     next:
       success: "final_summary"
 
@@ -313,13 +341,18 @@ nodes:
     type: "transform"
     params:
       script: |
-        return {
-          ...input,
-          status: 'RETRY_EXHAUSTED',
-          message: 'Some items failed after all retry attempts',
-          failed_items: input.failed_items || [],
-          next_action: 'manual_review_required'
-        };
+        var result = {};
+        // Copy input properties to result
+        for (var key in input) {
+          if (input.hasOwnProperty(key)) {
+            result[key] = input[key];
+          }
+        }
+        result.status = 'RETRY_EXHAUSTED';
+        result.message = 'Some items failed after all retry attempts';
+        result.failed_items = input.failed_items || [];
+        result.next_action = 'manual_review_required';
+        return result;
     next:
       success: "final_summary"
 
@@ -328,12 +361,17 @@ nodes:
     type: "transform"
     params:
       script: |
-        return {
-          ...input,
-          status: 'TIMEOUT_OCCURRED',
-          message: 'Processing timed out',
-          next_action: 'investigate_performance'
-        };
+        var result = {};
+        // Copy input properties to result
+        for (var key in input) {
+          if (input.hasOwnProperty(key)) {
+            result[key] = input[key];
+          }
+        }
+        result.status = 'TIMEOUT_OCCURRED';
+        result.message = 'Processing timed out';
+        result.next_action = 'investigate_performance';
+        return result;
     next:
       success: "final_summary"
 
@@ -342,13 +380,18 @@ nodes:
     type: "transform"
     params:
       script: |
-        return {
-          ...input,
-          status: 'ERROR_OCCURRED',
-          message: 'An error occurred during processing',
-          error_details: input.error || 'Unknown error',
-          next_action: 'check_system_health'
-        };
+        var result = {};
+        // Copy input properties to result
+        for (var key in input) {
+          if (input.hasOwnProperty(key)) {
+            result[key] = input[key];
+          }
+        }
+        result.status = 'ERROR_OCCURRED';
+        result.message = 'An error occurred during processing';
+        result.error_details = input.error || 'Unknown error';
+        result.next_action = 'check_system_health';
+        return result;
     next:
       success: "final_summary"
 
@@ -357,32 +400,37 @@ nodes:
     type: "transform"
     params:
       script: |
-        const endTime = new Date().toISOString();
+        var endTime = new Date().toISOString();
         
         // Access secrets again to verify they're available throughout the flow
-        const apiKey = secrets.API_KEY;
-        const dbPassword = secrets.DB_PASSWORD;
+        var apiKey = secrets.API_KEY;
+        var dbPassword = secrets.DB_PASSWORD;
         
         // Verify that we can still access the secrets
         if (!apiKey || !dbPassword) {
           throw new Error("Failed to access secrets in final node");
         }
         
-        return {
-          ...input,
-          execution_summary: {
-            completed_at: endTime,
-            final_status: input.status || 'COMPLETED',
-            total_processing_time: 'calculated_by_runtime',
-            items_processed: input.processed_items || 0,
-            success_rate: input.success_rate || 0,
-            recommendations: input.recommendations || [],
-            next_action: input.next_action || 'none',
-            // Include masked versions of the secrets to verify they were accessed
-            api_key_used: apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4),
-            db_password_used: '***' + dbPassword.substring(dbPassword.length - 4)
+        var result = {};
+        // Copy input properties to result
+        for (var key in input) {
+          if (input.hasOwnProperty(key)) {
+            result[key] = input[key];
           }
+        }
+        result.execution_summary = {
+          completed_at: endTime,
+          final_status: input.status || 'COMPLETED',
+          total_processing_time: 'calculated_by_runtime',
+          items_processed: input.processed_items || 0,
+          success_rate: input.success_rate || 0,
+          recommendations: input.recommendations || [],
+          next_action: input.next_action || 'none',
+          // Include masked versions of the secrets to verify they were accessed
+          api_key_used: apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4),
+          db_password_used: '***' + dbPassword.substring(dbPassword.length - 4)
         };
+        return result;
 `
 
 	// Register the complex flow
@@ -723,7 +771,7 @@ nodes:
     type: "transform"
     params:
       script: |
-        const value = Math.random() * 100;
+        var value = Math.random() * 100;
         return {
           test_value: value,
           category: value > 70 ? 'high' : (value > 30 ? 'medium' : 'low'),

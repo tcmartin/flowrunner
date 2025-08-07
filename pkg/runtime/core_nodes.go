@@ -45,6 +45,24 @@ func NewTransformNodeWrapper(params map[string]interface{}) (flowlib.Node, error
 	wrapper := &NodeWrapper{
 		node: baseNode,
 		exec: func(input interface{}) (interface{}, error) {
+			fmt.Printf("[Transform Script] [DEBUG] Full input received: %T, keys: %+v\n", input, func() []string {
+				if m, ok := input.(map[string]interface{}); ok {
+					keys := make([]string, 0, len(m))
+					for k := range m {
+						keys = append(keys, k)
+					}
+					return keys
+				}
+				return []string{}
+			}())
+
+			// Debug: print the content of each field
+			if m, ok := input.(map[string]interface{}); ok {
+				for k, v := range m {
+					fmt.Printf("[Transform Script] [DEBUG] Field %s: %T\n", k, v)
+				}
+			}
+
 			// Handle both old format (direct params) and new format (combined input)
 			var nodeParams map[string]interface{}
 			var flowInput map[string]interface{}
@@ -63,6 +81,7 @@ func NewTransformNodeWrapper(params map[string]interface{}) (flowlib.Node, error
 						if inputMap, ok := inputField.(map[string]interface{}); ok {
 							flowInput = inputMap
 						}
+						// If input is not a map (e.g., array from JoinNode), we'll handle it in the JavaScript setup
 					}
 				} else {
 					// Old format: direct params (backwards compatibility)
@@ -86,32 +105,60 @@ func NewTransformNodeWrapper(params map[string]interface{}) (flowlib.Node, error
 				"log": func(args ...interface{}) {
 					fmt.Printf("[Transform Script] %v\n", args...)
 				},
-			}) // Set up the context
-			// If we have flow input, add it as 'input' context
-			if flowInput != nil {
-				vm.Set("input", flowInput)
-			} else {
-				// For backwards compatibility, if no flow input, use the node params as input
-				vm.Set("input", nodeParams)
-			}
+			})
 
 			// Make the shared context available to JavaScript with thread-safe support
 			var sharedMap map[string]interface{}
 			if combinedInput, ok := input.(map[string]interface{}); ok {
-				if inputField, hasInput := combinedInput["input"]; hasInput {
+				fmt.Printf("[Transform Script] [DEBUG] Looking for shared context in combinedInput\n")
+
+				// Check if there's a separate shared context field
+				if sharedField, hasShared := combinedInput["shared"]; hasShared {
+					fmt.Printf("[Transform Script] [DEBUG] Found shared field: %T\n", sharedField)
+					if sharedMapActual, ok := sharedField.(map[string]interface{}); ok {
+						sharedMap = sharedMapActual
+					}
+				} else if inputField, hasInput := combinedInput["input"]; hasInput {
+					fmt.Printf("[Transform Script] [DEBUG] No shared field, using input field for shared context\n")
 					if inputMapActual, ok := inputField.(map[string]interface{}); ok {
 						sharedMap = inputMapActual
+
+						// If the input map is empty but we know there should be data (like from JoinNode),
+						// create a minimal shared context with just the mapper_results
+						if len(inputMapActual) == 0 {
+							fmt.Printf("[Transform Script] [DEBUG] Input map is empty, creating minimal shared context\n")
+							sharedMap = make(map[string]interface{})
+						}
 
 						// Create a thread-safe proxy for the shared context
 						sharedProxy := make(map[string]interface{})
 
 						// Copy non-sensitive data to the proxy
 						for k, v := range sharedMap {
-							if k != "_split_results" && k != "_execution" && k != "_flow_context" && k != "_secret_vault" && k != "mapper_results" {
+							if k != "_split_results" && k != "_execution" && k != "_flow_context" && k != "_secret_vault" {
 								sharedProxy[k] = v
 							}
 						}
+
+						// Special handling for JoinNode: if mapper_results exists but input doesn't,
+						// copy mapper_results to input so JavaScript can access it via shared.input
+						if mapperResults, hasMapperResults := sharedProxy["mapper_results"]; hasMapperResults {
+							if _, hasInput := sharedProxy["input"]; !hasInput {
+								fmt.Printf("[Transform Script] [DEBUG] Copying mapper_results to shared.input for JavaScript access\n")
+								sharedProxy["input"] = mapperResults
+							}
+						}
+
 						// Don't pre-create mapper_results - let JavaScript create its own native array
+
+						// Special handling: if mapper_results exists, also make it available as input
+						// This ensures the JavaScript script can access it via shared.input
+						if mapperResults, hasMapperResults := sharedProxy["mapper_results"]; hasMapperResults {
+							if _, hasInput := sharedProxy["input"]; !hasInput {
+								fmt.Printf("[Transform Script] [DEBUG] Adding mapper_results as shared.input for JavaScript access\n")
+								sharedProxy["input"] = mapperResults
+							}
+						}
 
 						// Set the proxy as the shared context for JavaScript
 						vm.Set("shared", sharedProxy)
@@ -123,21 +170,107 @@ func NewTransformNodeWrapper(params map[string]interface{}) (flowlib.Node, error
 							},
 						})
 
-						// Simple test: just set up a basic mapper_results array
-						fmt.Printf("[Transform Script] [DEBUG] Setting up basic mapper_results\n")
+						// Set up the JavaScript input context after shared context is ready
+						if combinedInput, ok := input.(map[string]interface{}); ok {
+							if inputField, hasInput := combinedInput["input"]; hasInput {
+								fmt.Printf("[Transform Script] [DEBUG] Raw inputField type: %T, value: %+v\n", inputField, inputField)
+								// If we have flowInput (map) and it's not empty, use it
+								if flowInput != nil && len(flowInput) > 0 {
+									fmt.Printf("[Transform Script] [DEBUG] Setting input from flowInput: %T, len=%d, content=%+v\n", flowInput, len(flowInput), flowInput)
+									vm.Set("input", flowInput)
+								} else {
+									// Check if the input field is empty and we have shared context data
+									if inputMap, ok := inputField.(map[string]interface{}); ok && len(inputMap) == 0 {
+										// Input is empty, create an input object with shared context data
+										inputObj := make(map[string]interface{})
 
-						// Simple test: just set up a basic mapper_results array
-						vm.Run(`
-							console.log("Setting up basic mapper_results array");
-							if (!shared.mapper_results) {
-								shared.mapper_results = [];
+										// Copy relevant data from shared context proxy
+										if sharedInput, hasSharedInput := sharedProxy["input"]; hasSharedInput {
+											inputObj["input"] = sharedInput
+											fmt.Printf("[Transform Script] [DEBUG] Added shared.input to input object\n")
+										}
+										if mapperResults, hasMapperResults := sharedProxy["mapper_results"]; hasMapperResults {
+											inputObj["mapper_results"] = mapperResults
+											fmt.Printf("[Transform Script] [DEBUG] Added shared.mapper_results to input object\n")
+										}
+
+										if len(inputObj) > 0 {
+											fmt.Printf("[Transform Script] [DEBUG] Input empty, using constructed input object: %+v\n", inputObj)
+											vm.Set("input", inputObj)
+										} else {
+											fmt.Printf("[Transform Script] [DEBUG] Input empty, no shared data, using empty input\n")
+											vm.Set("input", inputField)
+										}
+									} else {
+										// Otherwise, use the direct input field (handles arrays from JoinNode)
+										fmt.Printf("[Transform Script] [DEBUG] Setting input from combinedInput[\"input\"]: %T, content=%+v\n", inputField, inputField)
+										vm.Set("input", inputField)
+									}
+								}
+							} else {
+								// For backwards compatibility, if no flow input, use the node params as input
+								fmt.Printf("[Transform Script] [DEBUG] Setting input from nodeParams (no input field)\n")
+								vm.Set("input", nodeParams)
 							}
-							console.log("mapper_results setup complete, length:", shared.mapper_results.length);
+						} else {
+							fmt.Printf("[Transform Script] [DEBUG] Setting input from nodeParams (not combined input)\n")
+							vm.Set("input", nodeParams)
+						}
+
+						// Add a helper function to access data from various locations
+						fmt.Printf("[Transform Script] [DEBUG] Setting up data access helpers\n")
+
+						vm.Run(`
+							// Helper function to get results from any available location
+							function getResults() {
+								console.log("Helper: Checking for results in various locations");
+								
+								// Check input.input first (from JoinNode)
+								if (typeof input !== 'undefined' && input.input && input.input.length) {
+									console.log("Helper: Found results in input.input, length:", input.input.length);
+									return input.input;
+								}
+								
+								// Check shared.input (from JoinNode)
+								if (typeof shared !== 'undefined' && shared.input && shared.input.length) {
+									console.log("Helper: Found results in shared.input, length:", shared.input.length);
+									return shared.input;
+								}
+								
+								// Check input.mapper_results (from SplitNode)
+								if (typeof input !== 'undefined' && input.mapper_results && input.mapper_results.length) {
+									console.log("Helper: Found results in input.mapper_results, length:", input.mapper_results.length);
+									return input.mapper_results;
+								}
+								
+								// Check shared.mapper_results (from SplitNode)
+								if (typeof shared !== 'undefined' && shared.mapper_results && shared.mapper_results.length) {
+									console.log("Helper: Found results in shared.mapper_results, length:", shared.mapper_results.length);
+									return shared.mapper_results;
+								}
+								
+								console.log("Helper: No results found in any location");
+								return [];
+							}
 							
-							// Test basic push
-							console.log("Testing basic push...");
-							shared.mapper_results.push({test: "basic_test"});
-							console.log("After basic push, length:", shared.mapper_results.length);
+							// Make the helper available globally
+							this.getResults = getResults;
+							
+							// Automatically populate input.mapper_results if it's missing
+							var results = getResults();
+							if (results && results.length > 0) {
+								if (typeof input === 'undefined' || !input) {
+									input = {};
+								}
+								if (!input.mapper_results) {
+									input.mapper_results = results;
+									console.log("Helper: Populated input.mapper_results with", results.length, "results");
+								}
+								if (!input.input) {
+									input.input = results;
+									console.log("Helper: Populated input.input with", results.length, "results");
+								}
+							}
 						`)
 					}
 				}

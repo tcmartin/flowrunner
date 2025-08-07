@@ -105,14 +105,14 @@ func newBaseNode() baseNode {
 	}
 }
 
-func (b *baseNode) SetParams(p map[string]any)    { b.params = p }
-func (b *baseNode) Params() map[string]any        { return b.params }
-func (b *baseNode) Successors() map[Action]Node   { return b.successors }
-func (b *baseNode) Next(a Action, n Node)         { b.successors[a] = n }
-func (b *baseNode) Then(n Node)                   { b.Next(DefaultAction, n) }
+func (b *baseNode) SetParams(p map[string]any)          { b.params = p }
+func (b *baseNode) Params() map[string]any              { return b.params }
+func (b *baseNode) Successors() map[Action]Node         { return b.successors }
+func (b *baseNode) Next(a Action, n Node)               { b.successors[a] = n }
+func (b *baseNode) Then(n Node)                         { b.Next(DefaultAction, n) }
 func (b *baseNode) SetPrepFn(fn func(any) (any, error)) { b.prepFn = fn }
-func (b *baseNode) prep(shared any) (any, error)  { return b.prepFn(shared) }
-func (b *baseNode) exec(prepRes any) (any, error) { return nil, nil }
+func (b *baseNode) prep(shared any) (any, error)        { return b.prepFn(shared) }
+func (b *baseNode) exec(prepRes any) (any, error)       { return nil, nil }
 func (b *baseNode) post(shared, p, e any) (Action, error) {
 	return b.postFn(shared, p, e)
 }

@@ -204,7 +204,30 @@ nodes:
     params:
       script: |
         // Clean, simple processing with JoinNode-structured data
-        var results = input || [];
+        // Try multiple ways to access the JoinNode results
+        var results = [];
+        console.log("Reducer received context:", typeof input);
+        console.log("Available keys:", Object.keys(input));
+        
+        // Try different ways to access the data
+        if (input.input && input.input.length) {
+          results = input.input;
+          console.log("Found results in input.input");
+        } else if (shared && shared.input && shared.input.length) {
+          results = shared.input;
+          console.log("Found results in shared.input");
+        } else if (input.mapper_results && input.mapper_results.length) {
+          results = input.mapper_results;
+          console.log("Found results in input.mapper_results");
+        } else {
+          console.log("No results found, checking all available data");
+          console.log("input keys:", Object.keys(input));
+          if (typeof shared !== 'undefined') {
+            console.log("shared keys:", Object.keys(shared));
+          }
+        }
+        
+        console.log("Final results array length:", results.length);
         var total = 0;
         var processedInputs = [];
         var messages = [];
@@ -212,9 +235,14 @@ nodes:
         // Process the clean array from JoinNode
         for (var i = 0; i < results.length; i++) {
           var result = results[i];
-          total += result.output;
-          processedInputs.push(result.input);
-          messages.push(result.message);
+          console.log("Processing result", i, ":", typeof result, result);
+          if (result && result.output) {
+            total += result.output;
+            processedInputs.push(result.input);
+            messages.push(result.message);
+          } else {
+            console.log("Result", i, "is missing output property");
+          }
         }
         
         // Create individual squares array manually (Otto doesn't support map)
