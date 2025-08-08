@@ -34,10 +34,19 @@ func (l *DefaultYAMLLoader) Parse(yamlContent string) (*flowlib.Flow, error) {
 		return nil, fmt.Errorf("failed to parse YAML: %w", err)
 	}
 
-	// Create all the nodes
-	nodes := make(map[string]flowlib.Node)
-	for nodeName, nodeDef := range flowDef.Nodes {
-		factory, exists := l.nodeFactories[nodeDef.Type]
+    // Create all the nodes
+    nodes := make(map[string]flowlib.Node)
+    for nodeName, nodeDef := range flowDef.Nodes {
+        // Inject node_id into params for downstream logging/diagnostics
+        if nodeDef.Params == nil {
+            nodeDef.Params = make(map[string]interface{})
+        }
+        // Do not override if already present
+        if _, has := nodeDef.Params["node_id"]; !has {
+            nodeDef.Params["node_id"] = nodeName
+        }
+
+        factory, exists := l.nodeFactories[nodeDef.Type]
 		if !exists {
 			// If the node type is not in the built-in factories, try the plugin registry
 			plugin, err := l.pluginRegistry.Get(nodeDef.Type)
@@ -54,7 +63,7 @@ func (l *DefaultYAMLLoader) Parse(yamlContent string) (*flowlib.Flow, error) {
 			}
 			nodes[nodeName] = node
 		} else {
-			node, err := factory.CreateNode(nodeDef)
+            node, err := factory.CreateNode(nodeDef)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create node '%s': %w", nodeName, err)
 			}

@@ -29,6 +29,8 @@ type flowRuntime struct {
 
 	// In-memory tracking for active executions
 	activeExecutions map[string]*executionContext
+    // Cache of completed executions when no external store is configured
+    completedExecutions map[string]ExecutionStatus
 	mu               sync.RWMutex
 }
 
@@ -48,7 +50,8 @@ func NewFlowRuntime(registry FlowRegistry, yamlLoader loader.YAMLLoader) FlowRun
 	return &flowRuntime{
 		registry:         registry,
 		yamlLoader:       yamlLoader,
-		activeExecutions: make(map[string]*executionContext),
+        activeExecutions: make(map[string]*executionContext),
+        completedExecutions: make(map[string]ExecutionStatus),
 	}
 }
 
@@ -58,7 +61,8 @@ func NewFlowRuntimeWithStore(registry FlowRegistry, yamlLoader loader.YAMLLoader
 		registry:         registry,
 		yamlLoader:       yamlLoader,
 		executionStore:   executionStore,
-		activeExecutions: make(map[string]*executionContext),
+        activeExecutions: make(map[string]*executionContext),
+        completedExecutions: make(map[string]ExecutionStatus),
 	}
 }
 
@@ -68,7 +72,8 @@ func NewFlowRuntimeWithSecrets(registry FlowRegistry, yamlLoader loader.YAMLLoad
 		registry:         registry,
 		yamlLoader:       yamlLoader,
 		secretVault:      secretVault,
-		activeExecutions: make(map[string]*executionContext),
+        activeExecutions: make(map[string]*executionContext),
+        completedExecutions: make(map[string]ExecutionStatus),
 	}
 }
 
@@ -79,7 +84,8 @@ func NewFlowRuntimeWithStoreAndSecrets(registry FlowRegistry, yamlLoader loader.
 		yamlLoader:       yamlLoader,
 		executionStore:   executionStore,
 		secretVault:      secretVault,
-		activeExecutions: make(map[string]*executionContext),
+        activeExecutions: make(map[string]*executionContext),
+        completedExecutions: make(map[string]ExecutionStatus),
 	}
 }
 
@@ -151,7 +157,12 @@ func (r *flowRuntime) executeFlow(ctx context.Context, execCtx *executionContext
 
 		// Remove from active executions
 		r.mu.Lock()
-		delete(r.activeExecutions, execCtx.status.ID)
+        // Cache the final status in-memory if we don't have an external store
+        final := execCtx.status
+        delete(r.activeExecutions, execCtx.status.ID)
+        if r.executionStore == nil {
+            r.completedExecutions[execCtx.status.ID] = final
+        }
 		r.mu.Unlock()
 	}()
 
@@ -204,16 +215,22 @@ func (r *flowRuntime) executeFlow(ctx context.Context, execCtx *executionContext
 		Run(shared interface{}) (interface{}, error)
 	}); ok {
 		result, err = flowRunner.Run(enhancedInput)
-	} else if flowlibFlow, ok := flow.(interface {
-		Run(shared any) (string, error)
-	}); ok {
-		// Handle flowlib.Flow which returns (Action, error)
-		var action string
-		action, err = flowlibFlow.Run(enhancedInput)
-		if err == nil {
-			result = map[string]interface{}{"action": action}
-		}
-	} else {
+    } else if flowlibFlow, ok := flow.(interface {
+        Run(shared any) (string, error)
+    }); ok {
+        // Handle flowlib.Flow which returns (Action, error)
+        var action string
+        action, err = flowlibFlow.Run(enhancedInput)
+        if err == nil {
+            // Try to extract the final node result from the shared context populated by NodeWrapper
+            if finalShared, ok := enhancedInput["result"]; ok && finalShared != nil {
+                // Provide both action and final result for completeness
+                result = finalShared
+            } else {
+                result = map[string]interface{}{"action": action}
+            }
+        }
+    } else {
 		err = fmt.Errorf("flow does not implement expected execution interface")
 	}
 
@@ -253,6 +270,14 @@ func (r *flowRuntime) GetStatus(executionID string) (ExecutionStatus, error) {
 	if r.executionStore != nil {
 		return r.executionStore.GetExecution(executionID)
 	}
+
+    // Fall back to in-memory cache of completed executions
+    r.mu.RLock()
+    if status, ok := r.completedExecutions[executionID]; ok {
+        r.mu.RUnlock()
+        return status, nil
+    }
+    r.mu.RUnlock()
 
 	return ExecutionStatus{}, fmt.Errorf("execution not found: %s", executionID)
 }
@@ -324,8 +349,15 @@ func (r *flowRuntime) logExecution(executionID, level, message string, data map[
 		Timestamp: time.Now(),
 		Level:     level,
 		Message:   message,
-		Data:      data,
+        Data:      data,
 	}
+
+    // If caller passed node_id in data, propagate to structured log NodeID
+    if data != nil {
+        if nodeID, ok := data["node_id"].(string); ok {
+            log.NodeID = nodeID
+        }
+    }
 
 	// Save to execution store if available
 	if r.executionStore != nil {

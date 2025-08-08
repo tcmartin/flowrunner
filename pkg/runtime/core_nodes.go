@@ -171,14 +171,44 @@ func NewTransformNodeWrapper(params map[string]interface{}) (flowlib.Node, error
 						})
 
 						// Set up the JavaScript input context after shared context is ready
-						if combinedInput, ok := input.(map[string]interface{}); ok {
-							if inputField, hasInput := combinedInput["input"]; hasInput {
-								fmt.Printf("[Transform Script] [DEBUG] Raw inputField type: %T, value: %+v\n", inputField, inputField)
-								// If we have flowInput (map) and it's not empty, use it
-								if flowInput != nil && len(flowInput) > 0 {
-									fmt.Printf("[Transform Script] [DEBUG] Setting input from flowInput: %T, len=%d, content=%+v\n", flowInput, len(flowInput), flowInput)
-									vm.Set("input", flowInput)
-								} else {
+                        if combinedInput, ok := input.(map[string]interface{}); ok {
+                            if inputField, hasInput := combinedInput["input"]; hasInput {
+                                fmt.Printf("[Transform Script] [DEBUG] Raw inputField type: %T, value: %+v\n", inputField, inputField)
+                                // If we have flowInput (map) and it's not empty, use it
+                                if flowInput != nil && len(flowInput) > 0 {
+                                    // Prefer previous node's result when it looks like a reducer output
+                                    if prevRes, ok := flowInput["result"].(map[string]interface{}); ok {
+                                        if _, hasFlag := prevRes["map_reduce_complete"]; hasFlag {
+                                            fmt.Printf("[Transform Script] [DEBUG] Using previous node result as JS input (map_reduce_complete detected)\n")
+                                            vm.Set("input", prevRes)
+                                        } else if _, hasAgg := prevRes["aggregated_sum"]; hasAgg {
+                                            fmt.Printf("[Transform Script] [DEBUG] Using previous node result as JS input (aggregated_sum detected)\n")
+                                            vm.Set("input", prevRes)
+                                        } else if arr, ok := flowInput["input"].([]interface{}); ok {
+                                            // For reducer stage: expose clean array
+                                            fmt.Printf("[Transform Script] [DEBUG] Detected array at flowInput['input'] with length %d; exposing as JS input\n", len(arr))
+                                            vm.Set("input", arr)
+                                        } else if arr2, ok := inputField.([]interface{}); ok {
+                                            // Or if the top-level inputField is already an array
+                                            fmt.Printf("[Transform Script] [DEBUG] Detected top-level input array with length %d; exposing as JS input\n", len(arr2))
+                                            vm.Set("input", arr2)
+                                        } else {
+                                            fmt.Printf("[Transform Script] [DEBUG] Setting input from flowInput: %T, len=%d, content=%+v\n", flowInput, len(flowInput), flowInput)
+                                            vm.Set("input", flowInput)
+                                        }
+                                    } else if arr, ok := flowInput["input"].([]interface{}); ok {
+                                        // For reducer stage: expose clean array
+                                        fmt.Printf("[Transform Script] [DEBUG] Detected array at flowInput['input'] with length %d; exposing as JS input\n", len(arr))
+                                        vm.Set("input", arr)
+                                    } else if arr2, ok := inputField.([]interface{}); ok {
+                                        // Or if the top-level inputField is already an array
+                                        fmt.Printf("[Transform Script] [DEBUG] Detected top-level input array with length %d; exposing as JS input\n", len(arr2))
+                                        vm.Set("input", arr2)
+                                    } else {
+                                        fmt.Printf("[Transform Script] [DEBUG] Setting input from flowInput: %T, len=%d, content=%+v\n", flowInput, len(flowInput), flowInput)
+                                        vm.Set("input", flowInput)
+                                    }
+                                } else {
 									// Check if the input field is empty and we have shared context data
 									if inputMap, ok := inputField.(map[string]interface{}); ok && len(inputMap) == 0 {
 										// Input is empty, create an input object with shared context data
@@ -201,11 +231,16 @@ func NewTransformNodeWrapper(params map[string]interface{}) (flowlib.Node, error
 											fmt.Printf("[Transform Script] [DEBUG] Input empty, no shared data, using empty input\n")
 											vm.Set("input", inputField)
 										}
-									} else {
-										// Otherwise, use the direct input field (handles arrays from JoinNode)
-										fmt.Printf("[Transform Script] [DEBUG] Setting input from combinedInput[\"input\"]: %T, content=%+v\n", inputField, inputField)
-										vm.Set("input", inputField)
-									}
+                                    } else {
+                                        // Otherwise, use the direct input field (handles arrays from JoinNode)
+                                        if arr2, ok := inputField.([]interface{}); ok {
+                                            fmt.Printf("[Transform Script] [DEBUG] Using direct input array with length %d as JS input\n", len(arr2))
+                                            vm.Set("input", arr2)
+                                        } else {
+                                            fmt.Printf("[Transform Script] [DEBUG] Setting input from combinedInput[\"input\"]: %T, content=%+v\n", inputField, inputField)
+                                            vm.Set("input", inputField)
+                                        }
+                                    }
 								}
 							} else {
 								// For backwards compatibility, if no flow input, use the node params as input
